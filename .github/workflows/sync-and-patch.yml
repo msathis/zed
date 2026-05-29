@@ -1,0 +1,60 @@
+name: Sync Upstream and Patch
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Runs every 6 hours
+  workflow_dispatch: # Allows you to trigger it manually from the "Actions" tab
+
+jobs:
+  sync-and-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Using default token; if you want this push to trigger other 
+          # CI/CD workflows, use a Personal Access Token (PAT) instead.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync Main with Upstream (Preserving Workflow)
+        run: |
+          git remote add upstream https://github.com/zed-industries/zed.git
+          git fetch upstream
+          
+          # 1. Back up this specific workflow file to a temp directory
+          cp .github/workflows/sync-and-patch.yml /tmp/sync-and-patch.yml
+          
+          # 2. Hard reset main to upstream
+          git checkout main
+          git reset --hard upstream/main
+          
+          # 3. Restore the workflow file back into the repo
+          mkdir -p .github/workflows
+          cp /tmp/sync-and-patch.yml .github/workflows/sync-and-patch.yml
+          
+          # 4. Commit the restoration and force push
+          git add .github/workflows/sync-and-patch.yml
+          # Check if there's actually a change to commit (to avoid empty commit errors)
+          git diff-index --quiet HEAD || git commit -m "chore: sync with upstream & protect automation"
+          git push origin main --force
+
+      - name: Rebuild Next Branch
+        run: |
+          # Reset 'next' branch to the freshly updated 'main'
+          git checkout -B next main
+          
+          echo "Merging PR 1: Smooth Scrolling"
+          git pull --no-rebase https://github.com/marcocondrache/zed.git feat/smooth-scrolling --no-edit --strategy-option theirs
+          
+          echo "Merging PR 2: Search Popup"
+          git pull --no-rebase https://github.com/ozacod/zed.git feat/search-popup --no-edit --strategy-option theirs
+
+      - name: Force Push Next
+        run: git push origin next --force
