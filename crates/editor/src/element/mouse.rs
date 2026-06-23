@@ -549,7 +549,15 @@ impl EditorElement {
                                 }
                             };
 
-                            let current_scroll_position = position_map.snapshot.scroll_position();
+                            let current_scroll_position = match editor
+                                .scroll_manager
+                                .scroll_animation()
+                                .map(|animation| animation.target_position())
+                            {
+                                Some(target) => target,
+                                None => editor.scroll_position(cx),
+                            };
+
                             let x = (current_scroll_position.x
                                 * ScrollPixelOffset::from(glyph_width)
                                 - ScrollPixelOffset::from(delta.x * scroll_sensitivity))
@@ -567,7 +575,7 @@ impl EditorElement {
                             }
 
                             if scroll_position != current_scroll_position {
-                                editor.scroll(scroll_position, axis, window, cx);
+                                editor.scroll(scroll_position, axis, None, window, cx);
                                 cx.stop_propagation();
                             } else if y < 0. && !forbid_vertical_scroll {
                                 // Due to clamping, we may fail to detect cases of overscroll to the top;
