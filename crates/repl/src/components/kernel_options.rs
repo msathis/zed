@@ -481,7 +481,9 @@ where
         let picker_view = cx.new(|cx| {
             Picker::list(delegate, window, cx)
                 .list_measure_all()
-                .popover()
+                .width(rems(34.))
+                .height(rems(24.))
+                .no_vertical_padding()
         });
 
         PopoverMenu::new("kernel-switcher")

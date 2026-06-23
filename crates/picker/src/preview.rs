@@ -5,10 +5,9 @@ use std::sync::Arc;
 use editor::{Editor, HighlightKey, MultiBuffer, RowHighlightOptions};
 use gpui::{App, Task};
 use gpui::{AppContext, Context, Entity, TaskExt, Window};
-use language::{Buffer, HighlightedText, HighlightedTextBuilder, ToPoint};
+use language::{Buffer, HighlightedText};
 use project::Project;
-use rope::Point;
-use ui::{ActiveTheme, IntoElement, Pixels, px};
+use ui::{ActiveTheme, IntoElement};
 use util::rel_path::RelPath;
 
 pub mod render;
@@ -47,10 +46,10 @@ impl Preview {
         });
     }
 
-    pub fn render(&self, cx: &mut App) -> impl IntoElement {
+    pub fn render(&self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let layout = self.layout;
         self.content.update(cx, |content, cx| {
-            content.render(layout, cx).into_any_element()
+            content.render(layout, window, cx).into_any_element()
         })
     }
 
@@ -60,11 +59,6 @@ impl Preview {
         self.content.update(cx, |content, cx| {
             content.scroll_to_focus_match(window, cx);
         })
-    }
-
-    /// Empty the preview and show a placeholder message
-    pub(crate) fn clear(&self, cx: &mut App) {
-        self.content.update(cx, |content, _| content.clear())
     }
 }
 
@@ -173,20 +167,20 @@ impl EditorPreview {
             editor
         });
 
-        let mut this = Self {
+        Self {
             project,
             preview_editor,
             current_path: None,
             message: None,
-        };
-        this.clear(); // picker starts with no results.
-        this
+        }
     }
 
-    fn clear(&mut self) {
-        let mut message = HighlightedTextBuilder::default();
-        message.push_plain("No results to preview");
-        self.message = Some(message.build());
+    pub(crate) fn message(&self) -> Option<&HighlightedText> {
+        self.message.as_ref()
+    }
+
+    pub(crate) fn has_content(&self, cx: &App) -> bool {
+        !self.preview_editor.read(cx).is_empty(cx)
     }
 
     fn update(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
@@ -197,17 +191,31 @@ impl EditorPreview {
 
         match source {
             PreviewSource::Path(abs_path) => {
+                self.message = None;
                 self.update_from_path(abs_path, highlight, window, cx);
             }
             PreviewSource::Buffer(buffer) => {
-                self.update_from_buffer(buffer, highlight, window, cx);
+                self.message = None;
+                self.finish_update(buffer, highlight, window, cx);
                 cx.notify();
             }
             PreviewSource::Message(message) => {
-                self.message = Some(message);
-                cx.notify();
+                self.show_message(message, cx);
             }
         }
+    }
+
+    fn show_message(&mut self, message: HighlightedText, cx: &mut Context<Self>) {
+        self.current_path = None;
+        self.message = Some(message);
+        // The preview editor is read-only, so `Editor::clear` is a no-op here;
+        // clear the underlying multibuffer directly to drop any stale content.
+        self.preview_editor.update(cx, |editor, cx| {
+            editor.buffer().update(cx, |multi_buffer, cx| {
+                multi_buffer.clear(cx);
+            });
+        });
+        cx.notify();
     }
 
     fn update_from_path(
@@ -217,6 +225,8 @@ impl EditorPreview {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // TODO!(yara) debounce this/cache the last one for fast switching
+        // between top two results.
         let open_task = self.project.update(cx, |project, cx| {
             match project.project_path_for_absolute_path(&abs_path, cx) {
                 Some(project_path) => {
@@ -233,7 +243,7 @@ impl EditorPreview {
         cx.spawn_in(window, async move |this, cx| {
             let buffer = open_task.await?;
             this.update_in(cx, |this, window, cx| {
-                this.update_from_buffer(buffer, highlight, window, cx);
+                this.finish_update(buffer, highlight, window, cx);
                 cx.notify();
             })?;
             anyhow::Ok(())
@@ -241,41 +251,22 @@ impl EditorPreview {
         .detach_and_log_err(cx);
     }
 
-    fn update_from_buffer(
+    fn finish_update(
         &mut self,
         buffer: Entity<Buffer>,
         highlight: Option<MatchLocation>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.message = None; // show the preview editor
         self.current_path = buffer.read(cx).file().map(|file| file.path().clone());
 
-        const MIN_LINE_HEIGHT_PX: Pixels = px(6.0);
-        const MARGIN: u32 = 2; // scrolling can offset things;
-        let max_visible_rows =
-            (window.viewport_size().height / MIN_LINE_HEIGHT_PX).ceil() as u32 + MARGIN;
-
+        // TODO!(yara) do not set full range. We are not allowing scrolling anyway
+        let full_range = [rope::Point::zero()..buffer.read(cx).max_point()];
         self.preview_editor.update(cx, |editor, cx| {
-            let focus_row = highlight
-                .as_ref()
-                .map(|hl| {
-                    hl.anchor_range
-                        .start
-                        .to_point(&buffer.read(cx).text_snapshot())
-                        .row
-                })
-                .unwrap_or_default();
-
             let multi_buffer = editor.buffer().clone();
             multi_buffer.update(cx, |multi_buffer, cx| {
                 multi_buffer.clear(cx);
-                multi_buffer.set_excerpts_for_buffer(
-                    buffer,
-                    [Point::new(focus_row, 0)..Point::new(focus_row, 0)],
-                    max_visible_rows,
-                    cx,
-                );
+                multi_buffer.set_excerpts_for_buffer(buffer, full_range, 0, cx);
             });
 
             editor.clear_row_highlights::<SearchMatchLineHighlight>();
@@ -311,6 +302,7 @@ impl EditorPreview {
         self.scroll_to_focus_match(window, cx);
     }
 
+    // TODO!(yara) wire this up to run when dragging is done
     /// Keep the scroll as far left as possible while showing the match.
     /// Vertically center the match as much as possible
     fn scroll_to_focus_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {

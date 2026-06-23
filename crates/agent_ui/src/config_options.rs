@@ -299,7 +299,9 @@ impl ConfigOptionSelector {
                     Picker::nonsearchable_list(delegate, window, picker_cx)
                 }
                 .show_scrollbar(true)
-                .initial_width(rems(20.))
+                .width(rems(20.))
+                .height(rems(20.))
+                .no_vertical_padding()
             })
         };
 

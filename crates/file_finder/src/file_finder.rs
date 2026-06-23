@@ -169,10 +169,19 @@ impl FileFinder {
         let modal_max_width_setting = FileFinderSettings::get_global(cx).modal_max_width;
 
         let project = delegate.project.clone();
-        let modal_max_width = Self::modal_max_width(modal_max_width_setting, window);
         let picker = cx.new(|cx| {
-            Picker::uniform_list_with_preview(delegate, project, window, cx)
-                .initial_width(Rems::from_pixels(modal_max_width, window))
+            let picker = Picker::uniform_list_with_preview(delegate, project, window, cx)
+                .height(gpui::rems(24.))
+                .no_vertical_padding();
+            // The dedicated file finder width setting has been removed in favor of
+            // persisted picker sizes. For migration we still honor it as the initial
+            // width, but only if the user actually changed it from the default;
+            if modal_max_width_setting != FileFinderWidth::default() {
+                let modal_max_width = Self::modal_max_width(modal_max_width_setting, window);
+                picker.width(Rems::from_pixels(modal_max_width, window))
+            } else {
+                picker
+            }
         });
         let picker_focus_handle = picker.focus_handle(cx);
         picker.update(cx, |picker, _| {
@@ -1617,10 +1626,10 @@ impl PickerDelegate for FileFinderDelegate {
         "Search project files...".into()
     }
 
-    fn searchbar_trailer(
+    fn search_filter(
         &self,
         _window: &mut Window,
-        cx: &mut Context<Picker<Self>>,
+        _cx: &mut Context<Picker<Self>>,
     ) -> Option<AnyElement> {
         let focus_handle = self.focus_handle.clone();
         let including_ignored = self.include_ignored == Some(true);
@@ -1631,28 +1640,19 @@ impl PickerDelegate for FileFinderDelegate {
         } else {
             "Include Ignored Files"
         };
-
-        let filter_button = IconButton::new("filter-ignored", IconName::Sliders)
-            .icon_size(IconSize::Small)
-            .toggle_state(including_ignored)
-            .when(self.include_ignored.is_some(), |this| {
-                this.indicator(Indicator::dot().color(Color::Info))
-            })
-            .tooltip(move |_window, cx| {
-                Tooltip::for_action_in(tooltip_label, &ToggleIncludeIgnored, &focus_handle, cx)
-            })
-            .on_click(|_, window, cx| {
-                window.dispatch_action(ToggleIncludeIgnored.boxed_clone(), cx)
-            });
         Some(
-            h_flex()
-                .gap_1()
-                .child(filter_button)
-                .children(picker::parts::project_scan_indicator(
-                    self.latest_search_query.is_some(),
-                    &self.project,
-                    cx,
-                ))
+            IconButton::new("filter-ignored", IconName::Sliders)
+                .icon_size(IconSize::Small)
+                .toggle_state(including_ignored)
+                .when(self.include_ignored.is_some(), |this| {
+                    this.indicator(Indicator::dot().color(Color::Info))
+                })
+                .tooltip(move |_window, cx| {
+                    Tooltip::for_action_in(tooltip_label, &ToggleIncludeIgnored, &focus_handle, cx)
+                })
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(ToggleIncludeIgnored.boxed_clone(), cx)
+                })
                 .into_any_element(),
         )
     }
@@ -1821,7 +1821,7 @@ impl PickerDelegate for FileFinderDelegate {
                     ..Default::default()
                 };
                 let mut message = picker::HighlightedTextBuilder::default();
-                message.push_plain("Create file ");
+                message.push_plain("Create new file ");
                 message.push_styled(project_path.path.display(path_style), path_highlight);
                 message.push_plain("?");
                 Some(picker::PreviewUpdate::message(message.build()))

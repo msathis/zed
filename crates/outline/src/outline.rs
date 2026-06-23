@@ -179,10 +179,12 @@ impl OutlineView {
         let delegate = OutlineViewDelegate::new(cx.entity().downgrade(), outline, editor, cx);
         let picker = cx.new(|cx| {
             Picker::uniform_list(delegate, window, cx)
-                .max_height(Rems::from_pixels(
+                .width(rems(34.))
+                .height(Rems::from_pixels(
                     window.viewport_size().height * 0.75,
                     window,
                 ))
+                .no_vertical_padding()
                 .show_scrollbar(true)
         });
         OutlineView { picker }

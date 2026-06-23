@@ -128,7 +128,10 @@ impl WorktreePicker {
             Picker::list(delegate, window, cx)
                 .list_measure_all()
                 .show_scrollbar(true)
-                .embedded()
+                .modal(false)
+                .width(rems(34.))
+                .height(rems(20.))
+                .no_vertical_padding()
         });
 
         let picker_focus_handle = picker.focus_handle(cx);

@@ -26,6 +26,15 @@ macro_rules! relative_size {
         /// size relative to the font size (Rems). You can
         /// add/subtract/multiple/divide to your harts content but once you
         /// need a single unit you must provide a window to get it.
+        ///
+        /// # Example
+        /// Set the height of a div to be 95% of the area left when it is
+        /// placed at 5Rems from the top.
+        ///
+        /// ```rust
+        /// let max_height: RelativeHeight = (RelativeHeight::FULL - Rems(5.0)) * 0.95;
+        /// some_div.h(max_height.as_pixels(window);
+        /// ```
         #[derive(Debug, Clone, Copy, PartialEq)]
         pub struct $name {
             viewport_fraction: f32,
@@ -70,13 +79,6 @@ macro_rules! relative_size {
                     viewport_fraction: width / window.viewport_size().$accessor,
                     rems: Rems::ZERO,
                 }
-            }
-
-            /// Returns this size as [`Rems`] when it has no viewport-relative
-            /// component. Used to derive a rems-based minimum from an initial
-            /// size without needing a [`Window`].
-            pub fn as_rems(&self) -> Option<Rems> {
-                (self.viewport_fraction == 0.0).then_some(self.rems)
             }
 
             pub fn as_viewport_fraction(&self, window: &Window) -> ViewportFraction {
@@ -174,18 +176,19 @@ impl ViewportFraction {
     }
 
     /// Returns the fraction of the viewport that this describes.
-    /// Guaranteed to be between zero and one
+    /// Guarenteed to be between zero and one
     pub(crate) fn raw(&self) -> f32 {
         self.0
     }
 }
 
-impl std::ops::Mul<f32> for ViewportFraction {
-    type Output = Self;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        Self(self.0 * rhs)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum VerticalPadding {
+    /// The picker always fills its height even if there are no resutls
+    #[default]
+    Pad,
+    /// Picker might be shorter then it's height if there is not enough to display
+    None,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,19 +196,6 @@ pub(crate) struct Centered {
     pub(crate) width: RelativeWidth,
     pub(crate) height: RelativeHeight,
     pub(crate) preview_size: ViewportFraction,
-}
-
-impl Centered {
-    /// The default size for a plain picker (no preview): a fixed standard width
-    /// and a standard *max* height that the picker shrinks below when it has
-    /// little content.
-    pub(crate) fn simple() -> Self {
-        Centered {
-            width: RelativeWidth::rems(crate::DEFAULT_MODAL_WIDTH),
-            height: RelativeHeight::rems(crate::DEFAULT_MODAL_MAX_HEIGHT),
-            preview_size: ViewportFraction::ZERO,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,6 +212,7 @@ pub(crate) enum Shape {
 pub struct SizeBounds {
     pub(crate) max_width: RelativeWidth,
     pub(crate) max_height: RelativeHeight,
+    /// Minimum size of the results pane.
     pub(crate) min_results: Size<Rems>,
     /// Minimum size of the preview pane. Along the split axis this only needs to
     /// be large enough to grab the divider and shrink it back.
@@ -497,7 +488,7 @@ impl Shape {
         &self,
         layout: impl Into<Option<Layout>>,
         bounds: &SizeBounds,
-        fill_height: bool,
+        vertical_padding: VerticalPadding,
         div: Div,
         window: &Window,
     ) -> Div {
@@ -510,27 +501,29 @@ impl Shape {
             _ => full.right - full.left,
         };
         let div = div.w(width);
-        if fill_height {
-            let height = match layout {
-                Some(Layout::Below) => (full.bottom - full.top) - full.preview,
-                _ => full.bottom - full.top,
-            };
-            div.h(height)
-        } else {
-            div
+        match vertical_padding {
+            VerticalPadding::None => div,
+            VerticalPadding::Pad => {
+                let height = match layout {
+                    Some(Layout::Below) => (full.bottom - full.top) - full.preview,
+                    _ => full.bottom - full.top,
+                };
+                div.h(height)
+            }
         }
     }
 
     pub(crate) fn results_max_height(
         &self,
         bounds: &SizeBounds,
-        fill_height: bool,
+        vertical_padding: VerticalPadding,
         window: &Window,
     ) -> Option<Pixels> {
-        if fill_height {
-            None
-        } else {
-            Some(self.height(None, bounds, window))
+        match vertical_padding {
+            // No preview when results size themselves (no vertical padding), so
+            // clamp against the results-only minimum.
+            VerticalPadding::None => Some(self.height(None, bounds, window)),
+            VerticalPadding::Pad => None,
         }
     }
 
@@ -628,19 +621,9 @@ impl Shape {
         }
     }
 
-    pub(crate) fn center_divider(&mut self, layout: Layout, window: &Window) {
-        if let Shape::HorizontallyCentered(Centered {
-            width,
-            height,
-            preview_size,
-        }) = self
-        {
-            let total = match layout {
-                Layout::Right => width.as_viewport_fraction(window),
-                Layout::Below => height.as_viewport_fraction(window),
-                Layout::Hidden => return,
-            };
-            *preview_size = total * 0.5;
+    pub(crate) fn reset_preview_size(&mut self, default: &Centered) {
+        if let Shape::HorizontallyCentered(Centered { preview_size, .. }) = self {
+            *preview_size = default.preview_size;
         }
     }
 }
